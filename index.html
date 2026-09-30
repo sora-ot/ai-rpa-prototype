@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EasySpider AI 流程生成原型</title>
+  <style>
+    :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#17243a;background:#f4f7fb}
+    body{margin:0}main{max-width:940px;margin:30px auto;padding:0 18px 48px}
+    h1{font-size:27px;margin:0 0 7px}h2{font-size:19px;margin:0 0 14px}h3{font-size:16px;margin:14px 0 6px}
+    .hint{color:#59697d;line-height:1.6}.card{background:white;border:1px solid #dce5f1;border-radius:14px;padding:24px;margin-top:18px;box-shadow:0 5px 22px #23344a0d}
+    label{display:block;font-weight:650;margin:12px 0 6px}input,select,textarea{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bccbda;border-radius:8px;background:white;color:#17243a;font:inherit}
+    textarea{min-height:105px;resize:vertical}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    button{border:0;border-radius:8px;padding:11px 16px;background:#175cd3;color:white;font:inherit;font-weight:650;cursor:pointer}
+    button.secondary{background:#e8eef7;color:#184276}button:disabled{opacity:.48;cursor:not-allowed}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}.actions .spacer{flex:1}
+    .chat-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}.chat-head .actions{margin:0}
+    .chat-log{height:min(56vh,540px);min-height:280px;overflow:auto;background:#f7f9fd;border:1px solid #e2e8f0;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:16px}
+    .bubble{max-width:88%;padding:15px 17px;border-radius:14px;line-height:1.65;overflow-wrap:anywhere}
+    .bubble.user{align-self:flex-end;background:#dceaff;border-bottom-right-radius:4px;white-space:pre-wrap}
+    .bubble.assistant{align-self:flex-start;background:white;border:1px solid #dce5f1;border-bottom-left-radius:4px}
+    .bubble .who{font-size:13px;font-weight:700;color:#4f6481;margin-bottom:5px}.bubble ol{padding-left:24px;margin:6px 0;line-height:1.8}
+    .meta{white-space:pre-wrap;background:#f4f7fb;border-radius:8px;padding:10px;margin-top:8px}
+    .error{color:#b42318;white-space:pre-wrap}.status{color:#235e98}small{color:#68788a}.hidden{display:none}
+    table{border-collapse:collapse;width:100%;margin-top:12px;font-size:14px}th,td{border-bottom:1px solid #e2e8f0;padding:9px;text-align:left;vertical-align:top;word-break:break-word}th{background:#f8fafd}.scroll{overflow:auto}
+    @media(max-width:650px){.grid{grid-template-columns:1fr}.chat-head{display:block}.chat-head .actions{margin:10px 0}.bubble{max-width:100%}}
+  </style>
+</head>
+<body><main>
+  <h1>EasySpider AI 流程生成</h1>
+  <p class="hint">先设置模型，再通过对话确定采集流程。确认流程后才会打开目标网页；试采结果也需要你检查。</p>
+  <p id="error" class="error" role="alert"></p>
+
+  <section id="setup-card" class="card">
+    <h2>模型设置</h2>
+    <div class="grid">
+      <div><label for="provider">API 服务</label><select id="provider"><option value="deepseek">DeepSeek</option><option value="gpt">GPT / OpenAI</option><option value="gemini">Gemini</option></select></div>
+      <div><label for="model">模型名</label><input id="model" placeholder="使用默认模型"></div>
+    </div>
+    <label for="api-key">API Key（留空则使用本地 .env）</label><input id="api-key" type="password" autocomplete="off">
+    <p id="config-hint" class="hint"></p>
+    <div class="actions"><button id="enter-chat">进入对话</button></div>
+  </section>
+
+  <section id="chat-card" class="card hidden">
+    <div class="chat-head"><div><h2>采集流程对话</h2><p id="turn-hint" class="hint"></p></div>
+      <div class="actions"><button id="change-settings" class="secondary">模型设置</button><button id="new-task" class="secondary">新对话</button></div></div>
+    <div id="chat-log" class="chat-log" role="log" aria-label="采集流程对话"></div>
+    <label for="chat-input">输入需求、回答 AI 的问题，或说明需要修改的地方</label>
+    <textarea id="chat-input" placeholder="例如：采集公开图书网站的完整书名和价格，翻页直到末页"></textarea>
+    <div class="actions"><small id="char-count"></small><span class="spacer"></span><button id="send">发送</button><button id="run" class="secondary" disabled>确认流程并开始探索</button></div>
+    <p id="chat-hint" class="hint"></p>
+  </section>
+
+  <section id="progress-card" class="card hidden"><h2>网页探索与生成</h2><p id="status" class="status"></p><ol id="events"></ol></section>
+  <section id="login-card" class="card hidden"><h2>请在浏览器中登录</h2><p class="hint">AI 已暂停观察。请在刚打开的 Chrome 中自行输入账号、密码并完成验证；这些操作不会写入流程。完成后点击下方按钮，系统会重新打开目标页验证登录状态。</p><div class="actions"><button id="login-complete">已完成登录</button><button id="cancel-login" class="secondary">取消探索</button></div></section>
+  <section id="result-card" class="card hidden"><h2>检查试采样例</h2><p class="hint">以下为浏览器在当前页试采的数据。确认字段与数据正确后保存；完整任务可由 EasySpider 再次执行。</p><p id="pagination-result" class="meta"></p><div class="scroll"><table id="samples"></table></div><h3>字段定位</h3><div class="scroll"><table id="mapping"></table></div><div class="actions"><button id="save">样例正确，保存流程</button></div></section>
+  <section id="saved-card" class="card hidden"><h2>使用流程</h2><p id="saved-path" class="meta"></p><p id="profile-path" class="hint hidden"></p><p class="hint">在 ai-rpa-prototype 目录运行以下命令，可用设计阶段同一个浏览器资料目录测试原版执行器：</p><pre id="run-command"></pre><p class="hint">也可以导入运行中的 EasySpider，或将 JSON 文件复制到 EasySpider 的 tasks 目录并按其任务管理方式使用。</p><div class="actions"><button id="import">导入运行中的 EasySpider</button></div><p id="import-result"></p></section>
+  <small>首次网页探索动作预算与对话轮数分别控制。生成的翻页流程持续到没有下一页；遇到验证码或高风险按钮会停止。</small>
+</main><script src="/app.js"></script></body></html>

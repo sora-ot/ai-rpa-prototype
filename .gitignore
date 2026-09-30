@@ -1,0 +1,36 @@
+__pycache__/
+generated/
+.deps/
+.env*
+!.env.example
+.venv/
+executor_sandbox/
+profiles/
+browser_tmp/
+inputs/
+*.pyc
+
+# Runtime logs, browser state, credentials, and local exports.  Do not use
+# `git add -f` for these paths: they may contain cookies, API keys, private
+# page content, or account-specific task results.
+*.log
+*.pma
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.har
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.csv
+*.xlsx
+*.xls
+*.zip
+*.7z
+Data/
+TempUserDataFolder/
+user_data/
