@@ -16,7 +16,8 @@ AUTH_OVERLAY_JS = r"""
 const shown = e => {
   const s = getComputedStyle(e), r = e.getBoundingClientRect();
   return s.display !== 'none' && s.visibility !== 'hidden' &&
-    Number(s.opacity || 1) > 0 && r.width > 0 && r.height > 0;
+    Number(s.opacity || 1) > 0 && r.width > 0 && r.height > 0 &&
+    (!e.checkVisibility || e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
 };
 const meta = e => {
   const cls = typeof e.className === 'string' ? e.className : '';
@@ -59,7 +60,8 @@ def detect_challenge(driver, start_url):
         pass
     state = driver.execute_script("""
       const shown = e => { const s=getComputedStyle(e),r=e.getBoundingClientRect();
-        return s.display!=='none' && s.visibility!=='hidden' && r.width>0 && r.height>0; };
+        return s.display!=='none' && s.visibility!=='hidden' && Number(s.opacity||1)>0 && r.width>0 && r.height>0 &&
+          (!e.checkVisibility || e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); };
       return {url:location.href,title:document.title,
         password:[...document.querySelectorAll('input[type=password]')].some(shown),
         captcha:[...document.querySelectorAll('iframe,[id],[class]')]

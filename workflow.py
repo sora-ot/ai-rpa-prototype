@@ -52,6 +52,10 @@ def _node(graph, option, title, params, parent=0):
 def _extract_nodes(graph, extraction, parent=0):
     if extraction["mode"] == "list":
         p = _base(extraction["list_xpath"])
+        # Original executor keeps the wait settings only when this field is
+        # truthy before int conversion: string "0" means the main document.
+        p.update({"waitElement": extraction.get("ready_xpath", ""), "waitElementTime": 15,
+                  "waitElementIframeIndex": "0"})
         p.update({"loopType": 1, "pathList": "", "textList": "", "code": "",
                   "waitTime": 0, "exitCount": 0, "historyWait": 2,
                   "breakMode": 0, "breakCode": "", "breakCodeWaitTime": 0,
@@ -59,6 +63,9 @@ def _extract_nodes(graph, extraction, parent=0):
                   "skipCount": 0, "allXPaths": ""})
         parent = _node(graph, 8, "循环列表项", p, parent)
     p = _base()
+    if extraction["mode"] != "list":
+        p.update({"waitElement": extraction.get("ready_xpath", ""), "waitElementTime": 15,
+                  "waitElementIframeIndex": "0"})
     p["params"] = [_field_param(f, extraction["mode"] == "list") for f in extraction["fields"]]
     p.update({"clear": 1 if extraction.get("detail") else 0,
               "newLine": 0 if extraction.get("detail") else 1})
@@ -254,6 +261,8 @@ def validate_task(task):
             raise ValueError("不允许生成自定义代码")
         if p.get("xpath"):
             etree.XPath(p["xpath"])
+        if p.get("waitElement"):
+            etree.XPath(p["waitElement"])
         if n["option"] == 10:
             if p.get("class") == 2:
                 etree.XPath(p["value"])

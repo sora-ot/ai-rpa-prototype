@@ -343,8 +343,13 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "翻页方式不一致"):
             server.validate_plan_task(plan, {"containJudge": False})
         _check_pagination_decision(plan, snapshot, {"action": "extract", "next_id": "e7"})
-        server.validate_plan_task(plan, {"containJudge": True,
-                                         "graph": [{"option": 2, "title": "点击下一页"}]})
+        native = compile_task("https://example.org", "翻页验证", [],
+            {"mode": "single", "fields": [{"name": "标题", "attribute": "text", "xpath": "//h1"}],
+             "next_xpath": "//a[@rel='next']"})
+        server.validate_plan_task(plan, native)
+        next_node = next(n for n in native["graph"] if n["title"] == "点击下一页")
+        next_node["title"] = "去后一页"
+        server.validate_plan_task(plan, native)
 
     def test_replanning_keeps_all_requirements_and_user_url(self):
         history = [{"request": f"要求 {i}", "url_hint": "", "answers": [f"补充 {i}"],

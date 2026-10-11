@@ -1,132 +1,105 @@
 """Observe live DOM and expose bounded, grounded candidate IDs to the agent."""
 import base64
 import re
+from pathlib import Path
 from urllib.parse import urlparse
+from settings import (OBSERVATION_MAX_ELEMENTS, OBSERVATION_EXPANDED_ELEMENTS,
+                      OBSERVATION_MAX_LISTS, OBSERVATION_TEXT_CHARS,
+                      DOM_SUBTREE_CHARS, DOM_PAGE_CHARS, DOM_MAX_CHUNK_CHARS)
 
 
-OBSERVE_JS = r"""
-const visible = e => { const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&s.display!='none'&&s.visibility!='hidden'; };
-const absolute = e => { let p=[]; for(let n=e;n&&n.nodeType===1;n=n.parentElement){let i=1;for(let q=n.previousElementSibling;q;q=q.previousElementSibling)if(q.tagName===n.tagName)i++;p.unshift(n.tagName.toLowerCase()+'['+i+']');}return '/'+p.join('/');};
-const unique = path => {try{return document.evaluate('count('+path+')',document,null,XPathResult.NUMBER_TYPE,null).numberValue===1;}catch{return false;}};
-const literal = value => value.includes('"') ? (value.includes("'") ? null : "'"+value+"'") : '"'+value+'"';
-const nextToken = e => {
- const label=(e.innerText||e.getAttribute('aria-label')||'').trim().replace(/\s+/g,' ');
- if(/上一页|上页|\b(prev|previous)\b/i.test(label))return '';
- if(label.includes('下一页')||label.includes('下页'))return '下一页';
- if(/\bnext\b/i.test(label))return 'next';
- if(e.getAttribute('rel')==='next'||(e.parentElement&&e.parentElement.matches('li.next')))return 'rel';
- return '';
-};
-const isNext = e => e.matches('a,button') && !!nextToken(e);
-const xp = e => {
- if(e.tagName.toLowerCase()==='a' && e.parentElement && e.parentElement.matches('li.next')){
-  const path='//li[contains(concat(" ",normalize-space(@class)," ")," next ")]/a';
-  if(unique(path))return path;
- }
- const token=isNext(e)?nextToken(e):'',tag=e.tagName.toLowerCase();
- if(token==='下一页'){
-  const path='//'+tag+'[contains(normalize-space(.),"下一页") or contains(normalize-space(.),"下页")]';
-  if(unique(path))return path;
- }
- if(token==='next'){
-  const path='//'+tag+'[contains(translate(normalize-space(.),"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"next")]';
-  if(unique(path))return path;
- }
- if(e.getAttribute('rel')==='next'){
-  const path='//'+tag+'[@rel="next"]';if(unique(path))return path;
- }
- const role=e.getAttribute('role'),label=(e.innerText||'').trim().replace(/\s+/g,' ');
- if((role==='tab'||role==='button') && label.length>0 && label.length<=30){
-  const quoted=literal(label),quotedRole=literal(role);
-  if(quoted && quotedRole){
-   const path='//'+tag+'[@role='+quotedRole+' and normalize-space(.)='+quoted+']';
-   if(unique(path))return path;
-  }
- }
- for(const attr of ['id','data-testid','name','aria-label']){
-  const value=e.getAttribute(attr),quoted=value&&literal(value);
-  if(quoted){const path='//'+e.tagName.toLowerCase()+'[@'+attr+'='+quoted+']';if(unique(path))return path;}
- }
- const cls=e.classList&&e.classList[0];if(cls && /^[\w-]+$/.test(cls)){
-  const path='//'+e.tagName.toLowerCase()+'[contains(concat(" ",normalize-space(@class)," ")," '+cls+' ")]';if(unique(path))return path;
- }
- return absolute(e);
-};
-let els=[], lists=[], seen=new Set();
-const editable = e => {
- const tag=e.tagName.toLowerCase(),type=(e.getAttribute('type')||'').toLowerCase();
- if(tag==='input')return !['hidden','button','submit','reset','checkbox','radio','file','password'].includes(type)&&!e.disabled&&!e.readOnly;
- if(tag==='textarea')return !e.disabled&&!e.readOnly;
- return e.isContentEditable || e.getAttribute('role')==='textbox';
-};
-const safeUrl = value => {
- try { const u=new URL(value,location.href); for(const key of [...u.searchParams.keys()])
-   if(/token|secret|session|auth|code|key|password|credential/i.test(key))u.searchParams.set(key,'[redacted]');
-   u.hash=''; return u.href; } catch { return ''; }
-};
-const selector='a,button,input,textarea,select,[contenteditable="true"],[role="textbox"],img,source,h1,h2,h3,h4,p,span,small,strong,code,time,td,th,article,li,section,div';
-const focus=[...document.querySelectorAll('main,[role="main"],section')];
-const priorityLinks=[...document.querySelectorAll('a,button')].filter(isNext);
-// EasySpider's native list loop needs one XPath matching sibling records and
-// relative field XPaths inside its first record. Rank repeated sibling groups
-// before allocating the bounded element budget to navigation and filters.
-const groupsFound=[];
-for(const parent of document.querySelectorAll('main,article,section,ul,ol,table,div')){
- const children=[...parent.children].filter(visible);if(children.length<2||children.length>100)continue;
- const groups=new Map();
- for(const e of children){let key=e.tagName+'|'+(e.className&&typeof e.className==='string'?e.className.trim().split(/\s+/).slice(0,2).join(' '):'');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}
- for(const group of groups.values()){
-  if(group.length<2||group.length>80)continue;
-  const first=group[0],sample=(first.innerText||'').trim().replace(/\s+/g,' ').slice(0,350);
-  const links=first.querySelectorAll('a[href]').length,descendants=first.querySelectorAll('*').length;
-  const price=/[¥￥£€$]\s*\d|\b(?:price|USD|CNY)\b|价格/i.test(sample);
-  const sales=/已售|销量|人付款|人收货|\bsold\b|\breviews?\b/i.test(sample);
-  const score=Math.min(group.length,50)+Math.min(descendants,60)/6+
-    (sample.length>=30?10:0)+(price?25:0)+(sales?20:0)+(links?8:0);
-  groupsFound.push({parent,group,score});
- }
-}
-groupsFound.sort((a,b)=>b.score-a.score);
-for(const {parent,group,score} of groupsFound.slice(0,20)){
- const first=group[0],tag=first.tagName.toLowerCase();let path=xp(parent)+'/'+tag;
- const cls=first.className&&typeof first.className==='string'?first.className.trim().split(/\s+/)[0]:'';
- if(cls && /^[\w-]+$/.test(cls))path+='[contains(concat(" ",normalize-space(@class)," ")," '+cls+' ")]';
- lists.push({id:'l'+(lists.length+1),xpath:path,first_xpath:absolute(first),count:group.length,
-  score:Math.round(score),samples:group.slice(0,2).map(x=>(x.innerText||'').trim().replace(/\s+/g,' ').slice(0,180))});
-}
-const priorityControls=[...document.querySelectorAll('input,textarea,select,button,a,[role="tab"],[role="button"]')]
- .filter(e=>visible(e)&&(editable(e)||/销量|排序|搜索|下一页|\b(sort|search|next)\b/i.test(
-   (e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('placeholder')||'')))).slice(0,35);
-const recordFields=groupsFound.slice(0,3).flatMap(({group})=>
- group.slice(0,2).flatMap(root=>[root,...root.querySelectorAll(selector)]));
-const ordered=[...priorityLinks,...priorityControls,...recordFields,
- ...focus.flatMap(root=>[root,...root.querySelectorAll(selector)]),...document.querySelectorAll(selector)];
-for(const e of ordered){
- if(els.length>=160)break; if(!visible(e))continue;
- const fieldType=(e.getAttribute('type')||'').toLowerCase();
- if(e.matches('input') && (fieldType==='password'||fieldType==='hidden'||
-   /token|secret|session|auth|otp|verification|password/i.test((e.name||'')+' '+(e.id||''))))continue;
- const editables=editable(e)?[e]:[...e.querySelectorAll('input,textarea,[contenteditable="true"],[role="textbox"]')].filter(x=>visible(x)&&editable(x));
- const tag=e.tagName.toLowerCase(),txt=(e.innerText||'').trim().replace(/\s+/g,' ').slice(0,130);
- if(!txt && !e.getAttribute('title') && !e.getAttribute('placeholder') && !e.getAttribute('href') && !e.getAttribute('src') && !editables.length)continue;
- if((tag==='div'||tag==='section'||tag==='span') && e.children.length>6)continue;
- if((tag==='div'||tag==='section') && txt.length>200)continue;
- const path=xp(e); if(seen.has(path))continue;seen.add(path);
- const r=e.getBoundingClientRect();els.push({id:'e'+(els.length+1),tag,text:txt,class_name:typeof e.className==='string'?e.className.trim().split(/\s+/).slice(0,3).join(' '):'',title_attr:e.getAttribute('title')||'',placeholder:e.getAttribute('placeholder')||'',aria_label:e.getAttribute('aria-label')||'',href:e.getAttribute('href')?safeUrl(e.getAttribute('href')):'',role:e.getAttribute('role')||'',type:e.getAttribute('type')||'',xpath:path,absolute_xpath:absolute(e),editable:editable(e),editable_descendants:editables.length,editable_xpath:editables.length===1?xp(editables[0]):'',is_next:isNext(e),selected:e.getAttribute('aria-selected')==='true'||e.getAttribute('aria-pressed')==='true',bbox:[Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]});
-}
-return {url:safeUrl(location.href),title:document.title,text:(document.body.innerText||'').slice(0,4500),elements:els,lists:lists,
- next_candidates:els.filter(e=>e.is_next).map(e=>({id:e.id,text:e.text,href:e.href,xpath:e.xpath}))};
-"""
+OBSERVE_JS = (Path(__file__).resolve().parent / "dom_observer.js").read_text(encoding="utf-8")
 
 
 RISK_WORDS = ("支付", "付款", "购买", "下单", "提交订单", "删除", "发送", "转账", "pay", "checkout", "delete", "purchase", "send", "confirm order")
 
 
-def observe(driver, with_screenshot=False):
-    result = driver.execute_script(OBSERVE_JS)
+def observe(driver, with_screenshot=False, *, focus="balanced", expanded=False):
+    if focus not in ("balanced", "controls", "content"):
+        raise ValueError("网页观察范围必须为 balanced、controls 或 content")
+    result = driver.execute_script(OBSERVE_JS, {
+        "focus": focus, "limit": OBSERVATION_EXPANDED_ELEMENTS if expanded else OBSERVATION_MAX_ELEMENTS,
+        "maxLists": OBSERVATION_MAX_LISTS, "textChars": OBSERVATION_TEXT_CHARS})
     if with_screenshot:
         result["screenshot"] = base64.b64encode(driver.get_screenshot_as_png()).decode("ascii")
     return result
+
+
+def inspect_dom(driver, snapshot, *, scope="element", candidate_id=None, depth=0,
+                offset=0, max_chars=None):
+    """Read a cleaned region/page, registering every candidate exposed by the chunk.
+
+    Existing IDs remain grounded in this snapshot. No model-provided selector or
+    script is evaluated. Chunk offsets refer to the cleaned HTML, not raw source.
+    """
+    if scope not in ("element", "search", "list", "page"):
+        raise ValueError("DOM 范围必须为 element、search、list 或 page")
+    for label, value, upper in (("祖先层数", depth, 5), ("DOM 偏移", offset, 20_000_000)):
+        if type(value) is not int or not 0 <= value <= upper:
+            raise ValueError(f"{label}无效")
+    if max_chars is None:
+        max_chars = DOM_PAGE_CHARS if scope == "page" else DOM_SUBTREE_CHARS
+    if type(max_chars) is not int or not 1000 <= max_chars <= DOM_MAX_CHUNK_CHARS:
+        raise ValueError(f"DOM 分块长度应为 1000 至 {DOM_MAX_CHUNK_CHARS}")
+    root_xpath = ""
+    previous = snapshot.get("dom", {})
+    if offset and previous.get("scope") == scope and previous.get("candidate_id") == candidate_id:
+        if previous.get("depth", 0) != depth:
+            raise ValueError("DOM 分块读取必须保持相同 depth，或从 offset=0 重新读取")
+    if scope != "page":
+        if scope == "search" and not candidate_id:
+            forms = snapshot.get("search_forms", [])
+            candidate_id = forms[0]["input_id"] if forms else None
+        target = candidate(snapshot, candidate_id, "lists" if scope == "list" else "elements")
+        root_xpath = target["first_xpath"] if scope == "list" else target["xpath"]
+    config = {
+        "mode": "dom", "scope": scope, "root_xpath": root_xpath,
+        "depth": depth, "offset": offset, "max_chars": max_chars,
+        "known": [{"id": e["id"], "absolute_xpath": e["absolute_xpath"]}
+                  for e in snapshot.get("elements", []) if e.get("absolute_xpath")],
+        "known_lists": [{"id": g["id"], "xpath": g["xpath"], "first_xpath": g["first_xpath"]}
+                        for g in snapshot.get("lists", [])]}
+    try:
+        result = driver.execute_script(OBSERVE_JS, config)
+    except Exception as exc:
+        if type(exc).__name__ == "JavascriptException" and "DOM 区域已变化" in str(exc):
+            raise ValueError("DOM 区域已变化，请重新 observe") from None
+        raise
+    if snapshot.get("url") and result["url"] != snapshot["url"]:
+        raise ValueError("网页地址已变化，请重新 observe 后读取 DOM")
+    if offset and previous.get("scope") == scope and previous.get("candidate_id") == candidate_id:
+        if previous.get("fingerprint") != result["dom"]["fingerprint"]:
+            raise ValueError("DOM 在分块读取期间发生变化，请从 offset=0 重新读取")
+    merged = {e["id"]: e for e in snapshot.get("elements", [])}
+    merged.update({e["id"]: e for e in result["elements"]})
+    lists = {g["id"]: g for g in snapshot.get("lists", [])}
+    lists.update({g["id"]: g for g in result.get("lists", [])})
+    current_ids = [e["id"] for e in result["elements"]]
+    baseline_ids = snapshot.get("model_base_ids") or [e["id"] for e in snapshot.get("elements", [])]
+    model_ids = list(dict.fromkeys(current_ids + baseline_ids))
+    # Current chunk IDs always remain selectable; fill remaining room from the base.
+    model_ids = model_ids[:max(OBSERVATION_EXPANDED_ELEMENTS, len(current_ids))]
+    updated = dict(snapshot)
+    updated.update({"elements": list(merged.values()), "model_base_ids": baseline_ids,
+                    "model_element_ids": model_ids, "lists": list(lists.values()),
+                    "dom": {**result["dom"], "candidate_id": candidate_id, "depth": depth, "max_chars": max_chars}})
+    updated["observation_stats"] = {**snapshot.get("observation_stats", {}),
+        "dom_scope": scope, "dom_candidates": len(current_ids), "model_elements": len(model_ids),
+        "registered_elements": len(merged)}
+    selected = set(model_ids)
+    updated["next_candidates"] = [{"id": e["id"], "text": e.get("text", ""),
+                                   "href": e.get("href", ""), "xpath": e["xpath"]}
+                                  for e in merged.values() if e.get("is_next") and e["id"] in selected]
+    return updated
+
+
+def model_elements(snapshot):
+    """Keep the local ID registry while bounding the candidates sent to the model."""
+    selected = snapshot.get("model_element_ids")
+    if selected is None:
+        return snapshot.get("elements", [])
+    registry = {e["id"]: e for e in snapshot.get("elements", [])}
+    return [registry[item] for item in selected if item in registry]
 
 
 def candidate(snapshot, candidate_id, kind="elements"):
@@ -193,9 +166,10 @@ def check_action_target(element, action):
     # Search/filter forms commonly use a button labelled “提交”. It is not
     # itself a destructive action. Risk checks apply to actionable controls,
     # while a list container or product text may merely mention a keyword.
-    if element.get("tag") not in ("a", "button", "input") and element.get("role") != "button":
+    if element.get("tag") not in ("a", "button", "input") and element.get("role") != "button" and not element.get("clickable"):
         return
-    label = " ".join(str(element.get(k, "")) for k in ("text", "href", "role")).lower()
+    label = " ".join(str(element.get(k, "")) for k in (
+        "text", "href", "role", "semantic_label", "aria_label", "icon_hint")).lower()
     if _has_direct_risk_intent(label):
         raise ValueError("检测到支付、删除、发送等高风险按钮，已停止")
 

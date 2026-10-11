@@ -10,6 +10,17 @@ KEY_NAMES = {"deepseek": "DEEPSEEK_API_KEY", "gpt": "OPENAI_API_KEY", "gemini": 
 # Edit these two values to change the chat limits. The server enforces both.
 MAX_PLAN_TURNS = 15
 MAX_USER_MESSAGE_CHARS = 1000
+# Semantic snapshots scan the DOM locally; these limits bound model input.
+OBSERVATION_MAX_ELEMENTS = 1000
+OBSERVATION_EXPANDED_ELEMENTS = 3000
+OBSERVATION_MAX_LISTS = 80
+OBSERVATION_TEXT_CHARS = 6000
+MODEL_TEXT_CHARS = 4000
+MAX_OBSERVATION_REQUESTS = 12
+# DOM is read in bounded chunks; subsequent offsets expose the rest of the page.
+DOM_SUBTREE_CHARS = 16000
+DOM_PAGE_CHARS = 48000
+DOM_MAX_CHUNK_CHARS = 48000
 
 
 def risk_review_enabled(env=None):

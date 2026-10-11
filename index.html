@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>EasySpider AI 流程生成原型</title>
+  <link rel="stylesheet" href="/flowchart.css">
   <style>
     :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#17243a;background:#f4f7fb}
-    body{margin:0}main{max-width:940px;margin:30px auto;padding:0 18px 48px}
+    body{margin:0}main{max-width:1080px;margin:30px auto;padding:0 18px 48px}
     h1{font-size:27px;margin:0 0 7px}h2{font-size:19px;margin:0 0 14px}h3{font-size:16px;margin:14px 0 6px}
     .hint{color:#59697d;line-height:1.6}.card{background:white;border:1px solid #dce5f1;border-radius:14px;padding:24px;margin-top:18px;box-shadow:0 5px 22px #23344a0d}
     label{display:block;font-weight:650;margin:12px 0 6px}input,select,textarea{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bccbda;border-radius:8px;background:white;color:#17243a;font:inherit}
@@ -23,7 +24,10 @@
     .meta{white-space:pre-wrap;background:#f4f7fb;border-radius:8px;padding:10px;margin-top:8px}
     .error{color:#b42318;white-space:pre-wrap}.status{color:#235e98}small{color:#68788a}.hidden{display:none}
     table{border-collapse:collapse;width:100%;margin-top:12px;font-size:14px}th,td{border-bottom:1px solid #e2e8f0;padding:9px;text-align:left;vertical-align:top;word-break:break-word}th{background:#f8fafd}.scroll{overflow:auto}
-    @media(max-width:650px){.grid{grid-template-columns:1fr}.chat-head{display:block}.chat-head .actions{margin:10px 0}.bubble{max-width:100%}}
+    .workflow-layout{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(320px,1.2fr);gap:18px;align-items:start}
+    .flow-path{list-style:none;padding:0;margin:0}.flow-path>li{position:relative;margin-bottom:22px}.flow-path>li:not(:last-child)::after{content:'↓';display:block;text-align:center;color:#667a93;position:absolute;bottom:-22px;width:100%}
+    .flow-node{display:block;width:100%;text-align:left;background:#edf3ff;color:#17243a;border:1px solid #a8bedf;font-weight:500}.flow-node.selected{border:2px solid #175cd3;background:#dceaff}.flow-group{border:1px dashed #a8bedf;border-radius:10px;padding:10px}.flow-group .flow-path{padding:12px 0 0 16px}.flow-node.loop{background:#ecf8f1}.flow-node.judge,.flow-node.branch{background:#fff4dc}.node-meta{font-size:12px;color:#63768e;display:block;margin-top:5px}.workflow-layout input,.workflow-layout select{padding:8px}.workflow-layout label{font-size:13px}.field-row{border:1px solid #dce5f1;border-radius:8px;padding:10px;margin-top:10px}.debug-output{white-space:pre-wrap;max-height:240px;overflow:auto;background:#f4f7fb;padding:10px}.patch-change{padding:8px;border-bottom:1px solid #dce5f1;overflow-wrap:anywhere}.patch-change code{white-space:pre-wrap}.editor-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    @media(max-width:650px){.grid,.workflow-layout{grid-template-columns:1fr}.chat-head{display:block}.chat-head .actions{margin:10px 0}.bubble{max-width:100%}}
   </style>
 </head>
 <body><main>
@@ -55,6 +59,27 @@
   <section id="progress-card" class="card hidden"><h2>网页探索与生成</h2><p id="status" class="status"></p><ol id="events"></ol></section>
   <section id="login-card" class="card hidden"><h2>请在浏览器中登录</h2><p class="hint">AI 已暂停观察。请在刚打开的 Chrome 中自行输入账号、密码并完成验证；这些操作不会写入流程。完成后点击下方按钮，系统会重新打开目标页验证登录状态。</p><div class="actions"><button id="login-complete">已完成登录</button><button id="cancel-login" class="secondary">取消探索</button></div></section>
   <section id="result-card" class="card hidden"><h2>检查试采样例</h2><p class="hint">以下为浏览器在当前页试采的数据。确认字段与数据正确后保存；完整任务可由 EasySpider 再次执行。</p><p id="pagination-result" class="meta"></p><div class="scroll"><table id="samples"></table></div><h3>字段定位</h3><div class="scroll"><table id="mapping"></table></div><div class="actions"><button id="save">样例正确，保存流程</button></div></section>
-  <section id="saved-card" class="card hidden"><h2>使用流程</h2><p id="saved-path" class="meta"></p><p id="profile-path" class="hint hidden"></p><p class="hint">在 ai-rpa-prototype 目录运行以下命令，可用设计阶段同一个浏览器资料目录测试原版执行器：</p><pre id="run-command"></pre><p class="hint">也可以导入运行中的 EasySpider，或将 JSON 文件复制到 EasySpider 的 tasks 目录并按其任务管理方式使用。</p><div class="actions"><button id="import">导入运行中的 EasySpider</button></div><p id="import-result"></p></section>
-  <small>首次网页探索动作预算与对话轮数分别控制。生成的翻页流程持续到没有下一页；遇到验证码或高风险按钮会停止。</small>
-</main><script src="/app.js"></script></body></html>
+  <section id="workflow-card" class="card hidden">
+    <div class="editor-heading"><h2>流程图预览与 AI 修改</h2><button id="undo-edit" class="secondary">撤销上一版修改</button></div>
+    <p id="workflow-version" class="hint"></p><p id="samples-state" class="hint"></p>
+    <p class="hint">这里展示当前流程的只读预览。点击节点查看详情，可缩放浏览；修改要求请告诉 AI，手工编辑请前往 EasySpider。</p>
+    <div class="wf-preview" id="workflow-preview">
+      <div class="wf-toolbar"><div class="wf-toolbar-title">当前流程 <span class="wf-readonly">只读预览</span></div><div class="wf-zoom"><button id="workflow-zoom-out" aria-label="缩小流程图" title="缩小">−</button><output id="workflow-zoom-value" aria-live="polite">100%</output><button id="workflow-zoom-in" aria-label="放大流程图" title="放大">＋</button><button id="workflow-fit">适应宽度</button></div></div>
+      <div id="workflow-summary" class="wf-summary"></div>
+      <div class="wf-layout"><div id="workflow-viewport" class="wf-viewport" tabindex="0" aria-label="只读流程图，可滚动浏览"><div id="workflow-stage" class="wf-stage"><div id="workflow-surface" class="wf-surface"><svg id="workflow-links" class="wf-links" aria-hidden="true"></svg><div id="workflow-nodes" class="wf-nodes"></div></div></div></div><aside id="workflow-inspector" class="wf-inspector" aria-label="只读节点详情"></aside></div>
+      <div class="wf-legend"><span class="wf-kind-open">网页操作</span><span class="wf-kind-extract">提取</span><span class="wf-kind-loop">循环</span><span class="wf-kind-judge">判断 / 分支</span></div>
+    </div>
+    <h3>在 EasySpider 手工修改和调试</h3>
+    <ol class="hint"><li>在 EasySpider 首页选择“使用带用户信息浏览器设计”，填写下方目录并开始设计。</li><li>点击“在 EasySpider 原版设计器打开流程”，在原版流程图中自由修改并使用其 Chrome 调试。</li><li>在原版保存修改后，回到这里读取流程或要求 AI 局部修改。</li></ol>
+    <label for="native-profile">原版设计 Chrome 的用户资料目录（源码版相对路径）</label><input id="native-profile" readonly>
+    <div class="actions"><button id="native-copy-profile" class="secondary">复制资料目录</button><button id="native-open">在 EasySpider 原版设计器打开流程</button><button id="native-read" class="secondary">读取原版已保存流程</button><a id="native-view" class="hidden" target="_blank" rel="noopener">仅查看原版流程图</a></div>
+    <p id="native-status" class="hint"></p><p class="hint">首次打开会导入任务，之后复用同一任务 ID，AI 修改确认后更新原任务。原版设计 Chrome 必须由 EasySpider 启动，使用同一个资料目录。打包版请将路径换算为其数据目录下的相对路径。手工改动先在原版保存，再点击“读取原版已保存流程”同步刷新上方预览。</p>
+    <div class="actions"><button id="native-observe" class="secondary">读取原版 Chrome 当前网页</button></div><p id="native-page" class="hint"></p>
+    <h3>让 AI 修改当前流程</h3><p class="hint">AI 先展示修改建议，确认后刷新上方流程图。已导入 EasySpider 时，AI 会读取原版最新保存的图，再将确认的修改写回同一任务并刷新原版设计器。手工改动请先在原版保存；新增网页元素请在原版设计 Chrome 中进入对应页面。</p>
+    <textarea id="edit-message" maxlength="1000" placeholder="例如：只将采集页数从3页改为5页，并把价格字段改名为商品价格"></textarea>
+    <div class="actions"><button id="propose-edit">生成局部修改建议</button></div>
+    <div id="edit-proposal" class="hidden"><h3>待确认的修改</h3><p id="edit-summary"></p><div id="edit-changes"></div><div class="actions"><button id="confirm-edit">确认应用修改</button><button id="discard-edit" class="secondary">放弃建议</button></div></div>
+  </section>
+  <section id="saved-card" class="card hidden"><h2>使用流程</h2><p id="saved-path" class="meta"></p><p id="profile-path" class="hint hidden"></p><p class="hint">退出原版设计模式后，在 ai-rpa-prototype 目录运行以下命令，可用设计阶段同一个浏览器资料目录测试原版执行器：</p><pre id="run-command"></pre><p class="hint">已打开原版设计器的流程已在 EasySpider 中；再次导入会打开同一任务。</p><div class="actions"><button id="import">导入并打开原版设计器</button><a id="easyspider-editor-link" class="hidden" target="_blank" rel="noopener">仅查看原版流程图</a></div><p id="import-result"></p></section>
+  <small>手工修改与网页调试在 EasySpider 原版设计器中进行；AI 修改需确认后写回。正式采集前请检查完整任务输出。</small>
+</main><script src="/app.js"></script><script src="/flowchart.js"></script><script src="/editor.js"></script></body></html>

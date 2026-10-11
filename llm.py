@@ -73,7 +73,7 @@ def ask_json(provider, api_key, model, system, user, screenshot_b64=None):
             finish_reason = item.get("finishReason", "")
         else:
             content = [{"type": "text", "text": user + retry_note}]
-            if screenshot_b64 and provider == "gpt":
+            if screenshot_b64:
                 content.append({"type": "image_url", "image_url": {
                     "url": "data:image/png;base64," + screenshot_b64, "detail": "low"}})
             output_limit = ({"max_tokens": output_budget} if provider == "deepseek"
@@ -84,7 +84,7 @@ def ask_json(provider, api_key, model, system, user, screenshot_b64=None):
                 {"model": model, "temperature": 0.1, **output_limit,
                  "response_format": {"type": "json_object"},
                  "messages": [{"role": "system", "content": system},
-                              {"role": "user", "content": content if screenshot_b64 and provider == "gpt"
+                              {"role": "user", "content": content if screenshot_b64
                                else user + retry_note}]},
                 {"Content-Type": "application/json", "Authorization": "Bearer " + api_key},
             )

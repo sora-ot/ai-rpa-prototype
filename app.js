@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const defaultModels = {deepseek:'deepseek-chat', gpt:'gpt-4o-mini', gemini:'gemini-2.5-flash'};
+const defaultModels = {deepseek:'deepseek-flash', gpt:'gpt-4o-mini', gemini:'gemini-2.5-flash'};
 let session = sessionStorage.getItem('ai_rpa_session');
 let config = null, messages = [], latestPlan = null, revision = 0;
 let stateStatus = 'new', busy = false, timer = null, conversationEpoch = 0;
@@ -61,8 +61,15 @@ function renderMessages(items) {
       bubble.append(textElement('div', '你', 'who'));
       bubble.append(textElement('div', item.content || ''));
     } else {
-      number += 1;
-      renderPlan(bubble, item.plan, number);
+      if (item.edit) {
+        bubble.append(textElement('div', 'AI · 局部修改建议', 'who'));
+        bubble.append(textElement('p', item.edit.summary || ''));
+        (item.edit.questions || []).forEach(q => bubble.append(textElement('p', q)));
+        bubble.append(textElement('div', '请在下方流程图区域查看改动并确认应用。', 'hint'));
+      } else {
+        number += 1;
+        renderPlan(bubble, item.plan, number);
+      }
     }
     log.append(bubble);
   });
@@ -78,6 +85,8 @@ function updateControls() {
   $('char-count').textContent = `${count}/${limit} 字`;
   $('turn-hint').textContent = `已规划 ${revision}/${turns} 轮；每条消息最多 ${limit} 字。`;
   $('chat-input').disabled = waiting || exhausted;
+  $('new-task').disabled = waiting;
+  $('change-settings').disabled = waiting;
   $('send').disabled = waiting || exhausted || !count || count > limit;
   $('run').disabled = waiting || stateStatus !== 'planned' || !latestPlan ||
     latestPlan.needs_clarification || !latestPlan.start_url;
@@ -87,7 +96,7 @@ function updateControls() {
     (latestPlan?.needs_clarification ? '已到对话上限且仍需补充，请开始新对话。' : '已到对话上限，可以确认当前流程或开始新对话。') :
     (!latestPlan ? '请输入采集需求，AI 会先返回一版流程。' :
       latestPlan.needs_clarification ? '请在下方回答一个或多个问题，AI 会保留此前要求并更新流程。' :
-      '可以确认当前流程，或继续发送修改意见。');
+      (window.WorkflowEditor?.hasTask() ? '已有流程图：继续输入将生成局部修改建议，确认后才应用。' : '可以确认当前流程，或继续发送修改意见。'));
 }
 function enterStage(chat) {
   show('setup-card', !chat);
@@ -119,8 +128,10 @@ function renderResult(result) {
     '本次浏览器资料目录：' + result.profile_dir +
     '。下方的本地测试命令会自动使用此目录。若在源码版 EasySpider 界面执行，请先关闭 AI 探索浏览器，在任务执行页的“用户本地浏览器数据目录”填写相对路径：' +
     result.profile_relative_source +
-    '，再点“本地直接执行（带用户信息模式）”。只勾选带用户信息模式而不填写此目录，仍会使用原版的另一套登录资料。打包版请填写相对于其数据目录的路径；EasySpider 当前界面不接受绝对路径。';
+    '，再点“本地直接执行（带用户信息模式）”。执行前请退出原版设计模式并关闭探索 Chrome，以释放资料目录。只勾选带用户信息模式而不填写此目录，仍会使用原版的另一套登录资料。打包版请填写相对于其数据目录的路径；EasySpider 当前界面不接受绝对路径。';
   show('result-card');
+  $('save').textContent = result.samples_stale ? '保存当前流程' : '样例正确，保存流程';
+  window.WorkflowEditor?.render(result);
 }
 function showRunCommand(file) {
   const filename = String(file || '').split(/[\\/]/).pop();
@@ -139,7 +150,9 @@ function hydrate(state) {
   show('login-card', stateStatus === 'awaiting_login');
   show('result-card', stateStatus === 'preview' || stateStatus === 'saved');
   show('saved-card', stateStatus === 'saved');
+  if (stateStatus !== 'saved') show('easyspider-editor-link', false);
   if (stateStatus === 'preview' || stateStatus === 'saved') renderResult(state.result);
+  else window.WorkflowEditor?.clear();
   if (stateStatus === 'saved') {
     $('saved-path').textContent = state.file;
     showRunCommand(state.file);
@@ -150,6 +163,7 @@ function hydrate(state) {
     poll();
   }
   updateControls();
+  window.WorkflowEditor?.receive(state);
 }
 async function sendMessage() {
   const epoch = conversationEpoch;
@@ -157,6 +171,10 @@ async function sendMessage() {
   const limit = config.max_user_message_chars;
   if (!message) return error('请输入采集需求或修改意见');
   if (charCount(message) > limit) return error(`每条消息最多 ${limit} 字`);
+  if (window.WorkflowEditor?.hasTask()) {
+    await window.WorkflowEditor.proposeFromChat(message);
+    $('chat-input').value = ''; updateControls(); return;
+  }
   if (revision >= config.max_plan_turns) return error('本次对话已到轮数上限');
   error(); busy = true; updateControls();
   renderMessages([...messages, {role:'user', content:message}]);
@@ -208,6 +226,7 @@ async function poll() {
       clearInterval(timer); timer = null; error(state.error);
     }
     updateControls();
+    window.WorkflowEditor?.receive(state);
   } catch (exc) {
     if (pollingSession !== session) return;
     clearInterval(timer); timer = null; error(exc.message);
@@ -245,13 +264,18 @@ $('enter-chat').onclick = async () => {
 $('change-settings').onclick = () => {
   clearInterval(timer); timer = null; enterStage(false);
 };
-$('new-task').onclick = () => {
+$('new-task').onclick = async () => {
+  if (window.WorkflowEditor?.hasTask() && session) {
+    try { await api('/api/editor/debug/close', {session}); }
+    catch (exc) { return error(exc.message); }
+  }
   if (stateStatus === 'awaiting_login' && session) api('/api/cancel-login', {session}).catch(() => {});
   conversationEpoch += 1;
   clearInterval(timer); timer = null; session = null; sessionStorage.removeItem('ai_rpa_session');
   messages = []; latestPlan = null; revision = 0; stateStatus = 'new'; busy = false;
   $('chat-input').value = ''; error(); renderMessages(messages);
   ['progress-card','login-card','result-card','saved-card'].forEach(id => show(id, false));
+  window.WorkflowEditor?.clear();
   updateControls(); $('chat-input').focus();
 };
 $('chat-input').oninput = updateControls;
@@ -287,6 +311,7 @@ $('save').onclick = async () => {
   error(); $('save').disabled = true;
   try {
     const data = await api('/api/save', {session});
+    if (data.state) hydrate(data.state);
     stateStatus = 'saved'; $('saved-path').textContent = data.file;
     showRunCommand(data.file);
     show('saved-card'); $('saved-card').scrollIntoView({behavior:'smooth'});
@@ -299,6 +324,11 @@ $('import').onclick = async () => {
     const data = await api('/api/import', {session});
     $('import-result').textContent = '已导入 EasySpider，任务 ID：' + data.task_id +
       `。本地带用户信息测试：python run_native.py --task-id ${data.task_id}。若在 EasySpider 界面执行，请使用上方显示的资料目录。`;
+    const link = $('easyspider-editor-link');
+    link.href = 'http://127.0.0.1:8074/taskGrid/FlowChart_CN.html?id=' + data.task_id +
+      '&wsport=8084&backEndAddressServiceWrapper=' + encodeURIComponent('http://127.0.0.1:8074');
+    show('easyspider-editor-link');
+    if (data.state) hydrate(data.state);
   } catch (exc) { error(exc.message); }
   finally { $('import').disabled = false; }
 };
